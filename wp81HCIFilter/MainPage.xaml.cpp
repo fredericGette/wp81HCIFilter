@@ -23,10 +23,9 @@ using namespace Windows::Storage;
 using namespace concurrency;
 using namespace Windows::UI::Core;
 
-#define WIIMOTE_DEVICE 0x8000
+#define CONTROL_DEVICE 0x8000
 
-#define IOCTL_WIIMOTE_CONNECT CTL_CODE(WIIMOTE_DEVICE, 0x800, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define IOCTL_WIIMOTE_READ CTL_CODE(WIIMOTE_DEVICE, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_FILTER_CONTROL_CMD CTL_CODE(CONTROL_DEVICE, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 Win32Api win32Api;
 
@@ -445,7 +444,7 @@ void wp81HCIFilter::MainPage::SendIoctl()
 
 
 		DWORD returned;
-		BOOL success = win32Api.DeviceIoControl(hDevice, IOCTL_WIIMOTE_CONNECT, nullptr, 0, nullptr, 0, &returned, nullptr);
+		BOOL success = win32Api.DeviceIoControl(hDevice, IOCTL_FILTER_CONTROL_CMD, nullptr, 0, nullptr, 0, &returned, nullptr);
 		if (success)
 		{
 			debug(L"Device call control device succeeded! returned=%u\n", returned);

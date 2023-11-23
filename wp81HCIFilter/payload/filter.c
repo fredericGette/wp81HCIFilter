@@ -162,6 +162,15 @@ NTSTATUS EvtDriverDeviceAdd(WDFDRIVER  Driver, PWDFDEVICE_INIT  DeviceInit)
     //
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&deviceAttributes, DEVICEFILTER_CONTEXT);
  
+    UNICODE_STRING DeviceName = RTL_CONSTANT_STRING(L"\\Device\\wp81hcifilter");
+    status= WdfDeviceInitAssignName(DeviceInit, &DeviceName);
+    if (!NT_SUCCESS(status))
+    {
+        DbgPrint("HCI!WdfDeviceInitAssignName failed with Status code 0x%x\n", status);
+        goto exit;
+    }
+    DbgPrint("HCI!Assigned name=%S\n", L"\\Device\\wp81hcifilter");
+
 	//
     // Create a framework device object.  This call will in turn create
     // a WDM deviceobject, attach to the lower stack and set the
@@ -174,7 +183,7 @@ NTSTATUS EvtDriverDeviceAdd(WDFDRIVER  Driver, PWDFDEVICE_INIT  DeviceInit)
         );
     if (!NT_SUCCESS(status))
     {
-        DbgPrint("HCI!WdfDeviceCreate failed with Status code %d\n", status);
+        DbgPrint("HCI!WdfDeviceCreate failed with Status code 0x%x\n", status);
         goto exit;
     }
 	
