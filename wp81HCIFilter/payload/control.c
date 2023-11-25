@@ -93,6 +93,7 @@ Exit:
     return;
 }
 
+
 NTSTATUS DriverDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
 	UNREFERENCED_PARAMETER(DeviceObject);
@@ -101,26 +102,66 @@ NTSTATUS DriverDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
 	DbgPrint("Control!DriverDispatch IoControlCode=0x%06X\n",IoControlCode);
 
-	PFILE_OBJECT pFileObj;
+	NTSTATUS status;
+	HANDLE hRegister;
+	ULONG ulSize;
+	PKEY_VALUE_PARTIAL_INFORMATION info;
+	ULONG filterDeviceObjectAddr;
 	PDEVICE_OBJECT pFilterDeviceObject;
-	UNICODE_STRING filterName;
-	RtlInitUnicodeString(&filterName, L"\\Device\\wp81hcifilter");
-	NTSTATUS status = IoGetDeviceObjectPointer(&filterName, FILE_ALL_ACCESS, &pFileObj, &pFilterDeviceObject);
-	if (NT_SUCCESS(status)) {
-		DbgPrint("Control! pFilterDeviceObject=0x%p Driver=0x%p\n", pFilterDeviceObject, pFilterDeviceObject->DriverObject);
-
-		PDRIVER_OBJECT pFilterDriverObject = pFilterDeviceObject->DriverObject;
-		DbgPrint("Control! DriverName=%wZ\n", &(pFilterDriverObject->DriverName));
-
-		// https://stackoverflow.com/questions/5095406/iterating-over-wdm-device-stack
-		// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetlowerdeviceobject
-
-		SendAnIoctl(pFilterDeviceObject);
+	OBJECT_ATTRIBUTES objectAttributes;
+	UNICODE_STRING usKeyName;
+	UNICODE_STRING usValueName;
+	RtlInitUnicodeString(&usKeyName, L"\\REGISTRY\\MACHINE\\System\\CurrentControlSet\\Enum\\SystemBusQc\\SMD_BT\\4&315a27b&0&4097\\Device Parameters");
+	RtlInitUnicodeString(&usValueName, L"wp81DeviceObjectPointer");
+	InitializeObjectAttributes(&objectAttributes,
+	                           &usKeyName,
+	                           OBJ_CASE_INSENSITIVE,
+	                           NULL,
+	                           NULL );
+	status = ZwOpenKey(&hRegister, KEY_ALL_ACCESS, &objectAttributes);
+	if (!NT_SUCCESS(status)) {
+		DbgPrint("Control!InitializeObjectAttributes failed 0x%x\n", status);
 	}
-	else
-	{
-		DbgPrint("Control! IoGetDeviceObjectPointer failed (0x%x)\n", status);
+	else {
+		status = ZwQueryValueKey(hRegister,
+	                           &usValueName,
+	                           KeyValuePartialInformation ,
+	                           NULL,
+	                           0,
+	                           &ulSize);
+		if (status==STATUS_OBJECT_NAME_NOT_FOUND || ulSize==0) {
+			DbgPrint("Control!First ZwQueryValueKey failed 0x%x\n", status);
+		}
+		else {
+			DbgPrint("Control!ulSize=0x%X\n", ulSize);
+			info = ExAllocatePoolWithTag(PagedPool, ulSize, 'wp81');			
+			status = ZwQueryValueKey(hRegister,
+	                           &usValueName,
+	                           KeyValuePartialInformation ,
+	                           info,
+	                           ulSize,
+	                           &ulSize);
+			if (!NT_SUCCESS(status)) {
+				DbgPrint("Control!Second ZwQueryValueKey failed 0x%x\n", status);
+			}
+			else
+			{
+				DbgPrint("Control!info->Type=0x%X info->DataLength=0x%X\n", info->Type, info->DataLength);
+
+				RtlMoveMemory(&filterDeviceObjectAddr, info->Data, info->DataLength);
+				DbgPrint("Control!filterDeviceObjectAddr=0x%X\n", filterDeviceObjectAddr);
+				pFilterDeviceObject = (PDEVICE_OBJECT)filterDeviceObjectAddr;
+
+				DbgPrint("Control!pFilterDeviceObject=0x%p\n", pFilterDeviceObject);
+				DbgPrint("Control!FDO Type=%d (3=Device), Size=%d, Driver=0x%p\n",pFilterDeviceObject->Type, pFilterDeviceObject->Size, pFilterDeviceObject->DriverObject);
+
+				SendAnIoctl(pFilterDeviceObject);	
+			}
+			ExFreePoolWithTag(info, 'wp81');
+		}
+		ZwClose(hRegister);
 	}
+
 	
 
 	return CompleteIrp(Irp, STATUS_SUCCESS, 0);

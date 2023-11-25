@@ -162,15 +162,6 @@ NTSTATUS EvtDriverDeviceAdd(WDFDRIVER  Driver, PWDFDEVICE_INIT  DeviceInit)
     //
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&deviceAttributes, DEVICEFILTER_CONTEXT);
  
-    UNICODE_STRING DeviceName = RTL_CONSTANT_STRING(L"\\Device\\wp81hcifilter");
-    status= WdfDeviceInitAssignName(DeviceInit, &DeviceName);
-    if (!NT_SUCCESS(status))
-    {
-        DbgPrint("HCI!WdfDeviceInitAssignName failed with Status code 0x%x\n", status);
-        goto exit;
-    }
-    DbgPrint("HCI!Assigned name=%S\n", L"\\Device\\wp81hcifilter");
-
 	//
     // Create a framework device object.  This call will in turn create
     // a WDM deviceobject, attach to the lower stack and set the
@@ -236,6 +227,28 @@ NTSTATUS EvtDriverDeviceAdd(WDFDRIVER  Driver, PWDFDEVICE_INIT  DeviceInit)
 	RtlStringCbPrintfA(buffer, 32-1, "%p-%s", pWdmLowerDO->DriverObject->DeviceObject, shortDriverName);
 	RtlCopyMemory(deviceContext->Name, buffer, 32);
 	
+    WDFKEY hKey = NULL;
+    UNICODE_STRING valueName;
+    status = WdfDeviceOpenRegistryKey(device,
+                                      PLUGPLAY_REGKEY_DEVICE,
+                                      STANDARD_RIGHTS_ALL,
+                                      WDF_NO_OBJECT_ATTRIBUTES,
+                                      &hKey);
+    if (NT_SUCCESS (status)) {
+        RtlInitUnicodeString(&valueName, L"wp81DeviceObjectPointer");
+        status = WdfRegistryAssignULong (hKey,
+                                  &valueName,
+                                  (ULONG)pWdmFDO
+                                );
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("HCI!WdfRegistryAssignULong failed 0x%x\n", status);
+        }
+        WdfRegistryClose(hKey);
+    }
+    else {
+        DbgPrint("HCI!WdfDeviceOpenRegistryKey failed 0x%x\n", status);
+    }
+
 			
 exit:    
 	DbgPrint("HCI!End EvtDriverDeviceAdd\n");
