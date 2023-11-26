@@ -10,6 +10,53 @@
 
 // https://www.osr.com/nt-insider/2017-issue1/making-device-objects-accessible-safe/
 
+VOID printBufferContent(PVOID buffer, size_t bufSize)
+{
+	CHAR hexString[256];
+	CHAR chrString[256];
+	CHAR tempString[8];
+	size_t length;
+	RtlZeroMemory(hexString, 256);
+	RtlZeroMemory(chrString, 256);
+	RtlZeroMemory(tempString, 8);
+	unsigned char *p = (unsigned char*)buffer;
+	unsigned int i = 0;
+	BOOLEAN multiLine = FALSE;
+	for(; i<bufSize && i < 608; i++)
+	{
+		RtlStringCbPrintfA(tempString, 8, "%02X ", p[i]);
+		RtlStringCbCatA(hexString, 256, tempString);
+
+		RtlStringCbPrintfA(tempString, 8, "%c", p[i]>31 && p[i]<127 ? p[i] : '.' );
+		RtlStringCbCatA(chrString, 256, tempString);
+
+		if ((i+1)%38 == 0)
+		{
+			DbgPrint("Control!%s%s", hexString, chrString);
+			RtlZeroMemory(hexString, 256);
+			RtlZeroMemory(chrString, 256);
+			multiLine = TRUE;
+		}
+	}
+	RtlStringCbLengthA(hexString,256,&length);
+	if (length != 0)
+	{
+		CHAR padding[256];
+		RtlZeroMemory(padding, 256);
+		if (multiLine)
+		{
+			RtlStringCbPrintfA(padding, 256, "%*s", 3*(38-(i%38)),"");
+		}
+
+		DbgPrint("Control!%s%s%s", hexString, padding, chrString);
+	}
+
+	if (i == 608)
+	{
+		DbgPrint("Control!...\n");
+	}	
+}
+
 void DriverUnload(PDRIVER_OBJECT DriverObject) {
 	
 	DbgPrint("Control!DriverUnload\n");
@@ -52,21 +99,24 @@ NTSTATUS CompleteIrp(PIRP Irp, NTSTATUS status, ULONG_PTR info) {
 	return status;
 }
 
-VOID SendAnIoctl(PDEVICE_OBJECT TargetDevice)
+VOID SendAnIoctl(PDEVICE_OBJECT TargetDevice, ULONG IoControlCode, PVOID pOutputBuffer, size_t OutputBufferLength)
 {
     NTSTATUS        status;
     KEVENT          event;
     IO_STATUS_BLOCK iosb;
     PIRP            irp;
+	//PVOID			pOutputBuffer;
     
-	DbgPrint("Control!SendAnIoctl\n");
+	DbgPrint("Control!SendAnIoctl TargetDevice=0x%p IoControlCode=0x%X pOutputBuffer=0x%p OutputBufferLength=0x%X\n",TargetDevice, IoControlCode, pOutputBuffer, OutputBufferLength);
 
-    irp = IoBuildDeviceIoControlRequest(0x80002000,
+	//pOutputBuffer = ExAllocatePoolWithTag(PagedPool, 4, 'wp81');	
+
+    irp = IoBuildDeviceIoControlRequest(IoControlCode,
                                         TargetDevice,
                                         NULL,
                                         0,
-                                        NULL,
-                                        0,
+                                        pOutputBuffer,
+                                        OutputBufferLength,
                                         FALSE,
                                         &event,
                                         &iosb);
@@ -87,27 +137,22 @@ VOID SendAnIoctl(PDEVICE_OBJECT TargetDevice)
                               NULL);
         status = iosb.Status;
     }
+
+	printBufferContent(pOutputBuffer, 4);
  
 Exit:
+	//ExFreePoolWithTag(pOutputBuffer, 'wp81');
 	DbgPrint("Control!End SendAnIoctl\n");
     return;
 }
 
-
-NTSTATUS DriverDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+NTSTATUS queryFilterDeviceObject(PDEVICE_OBJECT *pFilterDeviceObject)
 {
-	UNREFERENCED_PARAMETER(DeviceObject);
-	
-	ULONG IoControlCode = Irp->Tail.Overlay.CurrentStackLocation->Parameters.DeviceIoControl.IoControlCode;
-
-	DbgPrint("Control!DriverDispatch IoControlCode=0x%06X\n",IoControlCode);
-
 	NTSTATUS status;
 	HANDLE hRegister;
 	ULONG ulSize;
 	PKEY_VALUE_PARTIAL_INFORMATION info;
 	ULONG filterDeviceObjectAddr;
-	PDEVICE_OBJECT pFilterDeviceObject;
 	OBJECT_ATTRIBUTES objectAttributes;
 	UNICODE_STRING usKeyName;
 	UNICODE_STRING usValueName;
@@ -150,21 +195,47 @@ NTSTATUS DriverDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
 				RtlMoveMemory(&filterDeviceObjectAddr, info->Data, info->DataLength);
 				DbgPrint("Control!filterDeviceObjectAddr=0x%X\n", filterDeviceObjectAddr);
-				pFilterDeviceObject = (PDEVICE_OBJECT)filterDeviceObjectAddr;
-
-				DbgPrint("Control!pFilterDeviceObject=0x%p\n", pFilterDeviceObject);
-				DbgPrint("Control!FDO Type=%d (3=Device), Size=%d, Driver=0x%p\n",pFilterDeviceObject->Type, pFilterDeviceObject->Size, pFilterDeviceObject->DriverObject);
-
-				SendAnIoctl(pFilterDeviceObject);	
+				*pFilterDeviceObject = (PDEVICE_OBJECT)filterDeviceObjectAddr;
 			}
 			ExFreePoolWithTag(info, 'wp81');
 		}
 		ZwClose(hRegister);
 	}
 
-	
+	return status;
+}
 
-	return CompleteIrp(Irp, STATUS_SUCCESS, 0);
+NTSTATUS DriverDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+{
+	UNREFERENCED_PARAMETER(DeviceObject);
+	NTSTATUS status;
+	PDEVICE_OBJECT pFilterDeviceObject;
+	ULONG IoControlCode;
+	size_t InputBufferLength;
+	size_t OutputBufferLength;
+	PVOID pOutputBuffer;
+
+	// https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/buffer-descriptions-for-i-o-control-codes#method_neither
+	IoControlCode = Irp->Tail.Overlay.CurrentStackLocation->Parameters.DeviceIoControl.IoControlCode;
+	InputBufferLength = Irp->Tail.Overlay.CurrentStackLocation->Parameters.DeviceIoControl.InputBufferLength;
+	OutputBufferLength = Irp->Tail.Overlay.CurrentStackLocation->Parameters.DeviceIoControl.OutputBufferLength;	
+
+	DbgPrint("Control!DriverDispatch IoControlCode=0x%X InputBufferLength=0x%X OutputBufferLength=0x%X\n",IoControlCode,InputBufferLength,OutputBufferLength);
+
+	pOutputBuffer = Irp->UserBuffer;
+	DbgPrint("Control!DriverDispatch pOutputBuffer=0x%p\n", pOutputBuffer);
+
+	status = queryFilterDeviceObject(&pFilterDeviceObject);
+	if (NT_SUCCESS(status)) {
+		DbgPrint("Control!pFilterDeviceObject=0x%p\n", pFilterDeviceObject);
+		DbgPrint("Control!FDO Type=%d (3=Device), Size=%d, Driver=0x%p\n",pFilterDeviceObject->Type, pFilterDeviceObject->Size, pFilterDeviceObject->DriverObject);
+		SendAnIoctl(pFilterDeviceObject, IoControlCode, pOutputBuffer, OutputBufferLength);	
+	}
+	else {
+		DbgPrint("Control!queryFilterDeviceObject failed 0x%x\n", status);
+	}
+
+	return CompleteIrp(Irp, status, 0);
 }
 
 NTSTATUS

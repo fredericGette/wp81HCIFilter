@@ -72,6 +72,53 @@ void debugMultiSz(WCHAR *multisz)
 	} while (*c != L'\0');
 }
 
+void printBufferContent(PVOID buffer, size_t bufSize)
+{
+	CHAR hexString[256];
+	CHAR chrString[256];
+	CHAR tempString[8];
+	size_t length;
+	RtlZeroMemory(hexString, 256);
+	RtlZeroMemory(chrString, 256);
+	RtlZeroMemory(tempString, 8);
+	unsigned char *p = (unsigned char*)buffer;
+	unsigned int i = 0;
+	BOOLEAN multiLine = FALSE;
+	for (; i<bufSize && i < 608; i++)
+	{
+		sprintf_s(tempString, 8, "%02X ", p[i]);
+		strcat_s(hexString, 256, tempString);
+
+		sprintf_s(tempString, 8, "%c", p[i]>31 && p[i]<127 ? p[i] : '.');
+		strcat_s(chrString, 256, tempString);
+
+		if ((i + 1) % 38 == 0)
+		{
+			debug(L"%S%S\n", hexString, chrString);
+			RtlZeroMemory(hexString, 256);
+			RtlZeroMemory(chrString, 256);
+			multiLine = TRUE;
+		}
+	}
+	length = strlen(hexString);
+	if (length != 0)
+	{
+		CHAR padding[256];
+		RtlZeroMemory(padding, 256);
+		if (multiLine)
+		{
+			sprintf_s(padding, 256, "%*s", 3 * (38 - (i % 38)), "");
+		}
+
+		debug(L"%S%S%S\n", hexString, padding, chrString);
+	}
+
+	if (i == 608)
+	{
+		debug(L"...\n");
+	}
+}
+
 void MainPage::UIConsoleAddText(Platform::String ^ text) {
 	Dispatcher->RunAsync(
 		CoreDispatcherPriority::Normal,
@@ -442,19 +489,21 @@ void wp81HCIFilter::MainPage::SendIoctl()
 			return;
 		}
 
-
+		PVOID pOutputBuffer = malloc(4);
 		DWORD returned;
-		BOOL success = win32Api.DeviceIoControl(hDevice, IOCTL_FILTER_CONTROL_CMD, nullptr, 0, nullptr, 0, &returned, nullptr);
+		BOOL success = win32Api.DeviceIoControl(hDevice, 0x410403, nullptr, 0, pOutputBuffer, 4, &returned, nullptr);
 		if (success)
 		{
 			debug(L"Device call control device succeeded! returned=%u\n", returned);
 			UIConsoleAddText(L"succeeded!\n");
+			printBufferContent(pOutputBuffer, 4);
 		}
 		else
 		{
 			debug(L"Device call control device failed! 0x%X\n", GetLastError());
 			UIConsoleAddText(L"failed!\n");
 		}
+		free(pOutputBuffer);
 
 		CloseHandle(hDevice);
 	});

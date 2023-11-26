@@ -123,6 +123,9 @@ FilterEvtIoDeviceControl(
     )
 {
     WDFDEVICE device;
+    NTSTATUS status;
+    PVOID  buffer = NULL;
+	size_t  bufSize = 0;
 
     //DbgPrint("HCI!Begin FilterEvtIoDeviceControl\n");
 
@@ -133,6 +136,16 @@ FilterEvtIoDeviceControl(
 		
 	DbgPrint("HCI!%s!Receive IoControlCode=0x%08X InputBufferLength=%u OutputBufferLength=%u\n",deviceContext->Name, IoControlCode, InputBufferLength, OutputBufferLength);
 	
+    if (InputBufferLength > 0) {
+        status = WdfRequestRetrieveInputBuffer(Request, InputBufferLength, &buffer, &bufSize);
+        if (!NT_SUCCESS(status)) {
+            DbgPrint("HCI!%s!WdfRequestRetrieveInputBuffer failed: 0x%x\n", deviceContext->Name, status);
+            WdfRequestComplete(Request, status);
+            return;
+        }
+        printBufferContent(buffer, bufSize, deviceContext->Name);
+    }
+
 	FilterForwardRequest(Request, WdfDeviceGetIoTarget(device), deviceContext);
 
 	//DbgPrint("HCI!%s!End FilterEvtIoDeviceControl\n",deviceContext->Name);
@@ -213,8 +226,8 @@ NTSTATUS EvtDriverDeviceAdd(WDFDRIVER  Driver, PWDFDEVICE_INIT  DeviceInit)
         goto exit;
     }   
 	
+    // Create a prefix name for the logs of this device.
 	PDEVICEFILTER_CONTEXT deviceContext = GetFilterContext(device);
-	
 	CHAR fullDriverName[32] = {0};
 	RtlStringCbPrintfA(fullDriverName, 32-1, "%wZ", &(pWdmLowerDO->DriverObject->DriverName));
 	CHAR *shortDriverName = fullDriverName;
@@ -227,6 +240,7 @@ NTSTATUS EvtDriverDeviceAdd(WDFDRIVER  Driver, PWDFDEVICE_INIT  DeviceInit)
 	RtlStringCbPrintfA(buffer, 32-1, "%p-%s", pWdmLowerDO->DriverObject->DeviceObject, shortDriverName);
 	RtlCopyMemory(deviceContext->Name, buffer, 32);
 	
+    // Store this device object pointer in registry (for the control device).
     WDFKEY hKey = NULL;
     UNICODE_STRING valueName;
     status = WdfDeviceOpenRegistryKey(device,
