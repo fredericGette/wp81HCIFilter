@@ -489,20 +489,28 @@ void wp81HCIFilter::MainPage::SendIoctl()
 			return;
 		}
 
+		UCHAR* pInputBuffer = (UCHAR*)malloc(4);
+		pInputBuffer[0] = 1;
+		pInputBuffer[1] = 0;
+		pInputBuffer[2] = 0;
+		pInputBuffer[3] = 0;
+		printBufferContent(pInputBuffer, 4);
 		PVOID pOutputBuffer = malloc(4);
 		DWORD returned;
 		BOOL success = win32Api.DeviceIoControl(hDevice, 0x410403, nullptr, 0, pOutputBuffer, 4, &returned, nullptr);
+		//BOOL success = win32Api.DeviceIoControl(hDevice, 0x410407, pInputBuffer, 4, nullptr, 0, &returned, nullptr);
 		if (success)
 		{
 			debug(L"Device call control device succeeded! returned=%u\n", returned);
 			UIConsoleAddText(L"succeeded!\n");
-			printBufferContent(pOutputBuffer, 4);
+			//printBufferContent(pOutputBuffer, 4);
 		}
 		else
 		{
 			debug(L"Device call control device failed! 0x%X\n", GetLastError());
 			UIConsoleAddText(L"failed!\n");
 		}
+		free(pInputBuffer);
 		free(pOutputBuffer);
 
 		CloseHandle(hDevice);

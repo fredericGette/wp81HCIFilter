@@ -99,22 +99,28 @@ NTSTATUS CompleteIrp(PIRP Irp, NTSTATUS status, ULONG_PTR info) {
 	return status;
 }
 
-VOID SendAnIoctl(PDEVICE_OBJECT TargetDevice, ULONG IoControlCode, PVOID pOutputBuffer, size_t OutputBufferLength)
+NTSTATUS SendAnIoctl(PDEVICE_OBJECT TargetDevice, 
+					ULONG IoControlCode, 
+					PVOID pInputBuffer, 
+					size_t InputBufferLength, 
+					PVOID pOutputBuffer, 
+					size_t OutputBufferLength,
+					ULONG_PTR* information)
 {
-    NTSTATUS        status;
+    NTSTATUS        status = STATUS_SUCCESS;
     KEVENT          event;
     IO_STATUS_BLOCK iosb;
     PIRP            irp;
 	//PVOID			pOutputBuffer;
     
-	DbgPrint("Control!SendAnIoctl TargetDevice=0x%p IoControlCode=0x%X pOutputBuffer=0x%p OutputBufferLength=0x%X\n",TargetDevice, IoControlCode, pOutputBuffer, OutputBufferLength);
+	DbgPrint("Control!SendAnIoctl TargetDevice=0x%p IoControlCode=0x%X pInputBuffer=0x%p InputBufferLength=0x%p pOutputBuffer=0x%p OutputBufferLength=0x%X\n",TargetDevice, IoControlCode, pInputBuffer, InputBufferLength, pOutputBuffer, OutputBufferLength);
 
 	//pOutputBuffer = ExAllocatePoolWithTag(PagedPool, 4, 'wp81');	
 
     irp = IoBuildDeviceIoControlRequest(IoControlCode,
                                         TargetDevice,
-                                        NULL,
-                                        0,
+                                        pInputBuffer,
+                                        InputBufferLength,
                                         pOutputBuffer,
                                         OutputBufferLength,
                                         FALSE,
@@ -136,14 +142,23 @@ VOID SendAnIoctl(PDEVICE_OBJECT TargetDevice, ULONG IoControlCode, PVOID pOutput
                               FALSE,
                               NULL);
         status = iosb.Status;
+		*information = iosb.Information;
     }
 
-	printBufferContent(pOutputBuffer, 4);
- 
+	if (InputBufferLength > 0) {
+		DbgPrint("Control! InputBuffer:\n");
+		printBufferContent(pInputBuffer, InputBufferLength);
+	}
+
+	if (OutputBufferLength > 0) {
+		DbgPrint("Control! OutputBuffer:\n");
+		printBufferContent(pOutputBuffer, OutputBufferLength);
+	}
+	 
 Exit:
 	//ExFreePoolWithTag(pOutputBuffer, 'wp81');
 	DbgPrint("Control!End SendAnIoctl\n");
-    return;
+    return status;
 }
 
 NTSTATUS queryFilterDeviceObject(PDEVICE_OBJECT *pFilterDeviceObject)
@@ -214,6 +229,8 @@ NTSTATUS DriverDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 	size_t InputBufferLength;
 	size_t OutputBufferLength;
 	PVOID pOutputBuffer;
+	PVOID pInputBuffer;
+	ULONG_PTR information = 0;
 
 	// https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/buffer-descriptions-for-i-o-control-codes#method_neither
 	IoControlCode = Irp->Tail.Overlay.CurrentStackLocation->Parameters.DeviceIoControl.IoControlCode;
@@ -222,20 +239,21 @@ NTSTATUS DriverDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
 	DbgPrint("Control!DriverDispatch IoControlCode=0x%X InputBufferLength=0x%X OutputBufferLength=0x%X\n",IoControlCode,InputBufferLength,OutputBufferLength);
 
+	pInputBuffer = Irp->Tail.Overlay.CurrentStackLocation->Parameters.DeviceIoControl.Type3InputBuffer;
 	pOutputBuffer = Irp->UserBuffer;
-	DbgPrint("Control!DriverDispatch pOutputBuffer=0x%p\n", pOutputBuffer);
+	DbgPrint("Control!DriverDispatch pInputBuffer=0x%p pOutputBuffer=0x%p\n", pInputBuffer, pOutputBuffer);
 
 	status = queryFilterDeviceObject(&pFilterDeviceObject);
 	if (NT_SUCCESS(status)) {
 		DbgPrint("Control!pFilterDeviceObject=0x%p\n", pFilterDeviceObject);
 		DbgPrint("Control!FDO Type=%d (3=Device), Size=%d, Driver=0x%p\n",pFilterDeviceObject->Type, pFilterDeviceObject->Size, pFilterDeviceObject->DriverObject);
-		SendAnIoctl(pFilterDeviceObject, IoControlCode, pOutputBuffer, OutputBufferLength);	
+		status = SendAnIoctl(pFilterDeviceObject, IoControlCode, pInputBuffer, InputBufferLength, pOutputBuffer, OutputBufferLength, &information);	
 	}
 	else {
 		DbgPrint("Control!queryFilterDeviceObject failed 0x%x\n", status);
 	}
 
-	return CompleteIrp(Irp, status, 0);
+	return CompleteIrp(Irp, status, information);
 }
 
 NTSTATUS
