@@ -16,27 +16,14 @@ typedef struct _DEVICEFILTER_CONTEXT
 } DEVICEFILTER_CONTEXT, *PDEVICEFILTER_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICEFILTER_CONTEXT, GetFilterContext);
 
-typedef struct _CONTROL_DEVICE_EXTENSION {
-    WDFDEVICE filterDevice; 
-} CONTROL_DEVICE_EXTENSION, *PCONTROL_DEVICE_EXTENSION;
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CONTROL_DEVICE_EXTENSION, GetControlContext)
-
-typedef enum _BTHX_HCI_PACKET_TYPE {
-    HciPacketCommand    = 0x01,
-    HciPacketAclData    = 0x02,
-    HciPacketEvent      = 0x04
-} BTHX_HCI_PACKET_TYPE;
-
-#pragma pack(1)
-typedef struct _BTHX_HCI_READ_WRITE_CONTEXT {
-    ULONG   DataLen;    // Size of Data
-    UCHAR   Type;       // Packet Type
-    _Field_size_bytes_(DataLen) UCHAR   Data[1];    // Actual data
-} BTHX_HCI_READ_WRITE_CONTEXT, *PBTHX_HCI_READ_WRITE_CONTEXT;
-#pragma pack(8)
+typedef struct _COMPLETION_CONTEXT
+{
+	CHAR Name[32];
+    ULONG uid;
+} COMPLETION_CONTEXT, *PCOMPLETION_CONTEXT;
 
 
-VOID printBufferContent(PVOID buffer, size_t bufSize, CHAR* deviceName)
+VOID printBufferContent(PVOID buffer, size_t bufSize, CHAR* Name, ULONG uid)
 {
 	CHAR hexString[256];
 	CHAR chrString[256];
@@ -58,7 +45,7 @@ VOID printBufferContent(PVOID buffer, size_t bufSize, CHAR* deviceName)
 
 		if ((i+1)%38 == 0)
 		{
-			DbgPrint("HCI!%s!%s%s",deviceName, hexString, chrString);
+			DbgPrint("HCI!%s!%08X!%s%s", Name, uid, hexString, chrString);
 			RtlZeroMemory(hexString, 256);
 			RtlZeroMemory(chrString, 256);
 			multiLine = TRUE;
@@ -74,15 +61,103 @@ VOID printBufferContent(PVOID buffer, size_t bufSize, CHAR* deviceName)
 			RtlStringCbPrintfA(padding, 256, "%*s", 3*(38-(i%38)),"");
 		}
 
-		DbgPrint("HCI!%s!%s%s%s",deviceName, hexString, padding, chrString);
+		DbgPrint("HCI!%s!%08X!%s%s%s",Name, uid, hexString, padding, chrString);
 	}
 
 	if (i == 608)
 	{
-		DbgPrint("HCI!%s!...\n",deviceName);
+		DbgPrint("HCI!%s!%08X!...\n",Name, uid);
 	}	
 }
 
+VOID
+FilterRequestCompletionRoutine(
+    IN WDFREQUEST                  Request,
+    IN WDFIOTARGET                 Target,
+    PWDF_REQUEST_COMPLETION_PARAMS CompletionParams,
+    IN WDFCONTEXT                  Context
+   )
+{
+    UNREFERENCED_PARAMETER(Target);
+	
+	NTSTATUS status;
+	PCOMPLETION_CONTEXT completionContext = Context;
+	size_t OutputBufferLength;
+	PIRP irp;
+	UCHAR MajorFunction;
+	PVOID  buffer = NULL;
+	size_t  bufSize = 0;
+	ULONG IoControlCode;
+
+	irp = WdfRequestWdmGetIrp(Request);
+	MajorFunction = irp->Tail.Overlay.CurrentStackLocation->MajorFunction;
+		
+	if (MajorFunction == IRP_MJ_DEVICE_CONTROL || MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL)
+	{
+		IoControlCode = irp->Tail.Overlay.CurrentStackLocation->Parameters.DeviceIoControl.IoControlCode;
+
+		// Looks like this is the real OutputBufferLength
+		OutputBufferLength = CompletionParams->IoStatus.Information;
+
+		DbgPrint("HCI!%s!%08X!Complete IoControlCode=0x%X OutputBufferLength=%u Status=0x%X\n", completionContext->Name, completionContext->uid, IoControlCode, OutputBufferLength, CompletionParams->IoStatus.Status);
+
+		if (OutputBufferLength > 0)
+		{
+			status = WdfRequestRetrieveOutputBuffer(Request, OutputBufferLength, &buffer, &bufSize );
+			if (!NT_SUCCESS(status)) {
+				DbgPrint("HCI!%s!%08X!WdfRequestRetrieveOutputBuffer failed: 0x%x\n", completionContext->Name, completionContext->uid, status);
+				goto exit;
+			}
+			printBufferContent(buffer, OutputBufferLength, completionContext->Name, completionContext->uid);
+		}
+	}
+	
+exit:
+    ExFreePoolWithTag(completionContext, 'wp81');
+    WdfRequestComplete(Request, CompletionParams->IoStatus.Status);
+
+    return;
+}
+
+
+VOID
+FilterForwardRequestWithCompletionRoutine(
+    IN WDFREQUEST Request,
+    IN WDFIOTARGET Target,
+	IN PDEVICEFILTER_CONTEXT deviceContext,
+    ULONG uid
+    )
+{
+    BOOLEAN ret;
+    NTSTATUS status;
+    PCOMPLETION_CONTEXT completionContext;
+
+    //
+    // The following function essentially copies the content of
+    // current stack location of the underlying IRP to the next one. 
+    //
+    WdfRequestFormatRequestUsingCurrentType(Request);
+
+    completionContext = ExAllocatePoolWithTag(PagedPool, sizeof(COMPLETION_CONTEXT), 'wp81');
+    RtlCopyMemory(completionContext->Name, deviceContext->Name, 32);
+    completionContext->uid = uid;
+
+    WdfRequestSetCompletionRoutine(Request,
+                                FilterRequestCompletionRoutine,
+                                completionContext);
+
+    ret = WdfRequestSend(Request,
+                         Target,
+                         WDF_NO_SEND_OPTIONS);
+
+    if (ret == FALSE) {
+        status = WdfRequestGetStatus (Request);
+        DbgPrint("HCI!%s!%08X!WdfRequestSend failed: 0x%x\n",deviceContext->Name, uid, status);
+        WdfRequestComplete(Request, status);
+    }
+
+    return;
+}
 
 VOID
 FilterForwardRequest(
@@ -126,27 +201,30 @@ FilterEvtIoDeviceControl(
     NTSTATUS status;
     PVOID  buffer = NULL;
 	size_t  bufSize = 0;
+    ULONG seed = 1;
+    ULONG uid;
+
+    uid = RtlRandomEx(&seed);
 
     //DbgPrint("HCI!Begin FilterEvtIoDeviceControl\n");
 
     device = WdfIoQueueGetDevice(Queue);
 	PDEVICEFILTER_CONTEXT deviceContext = GetFilterContext(device);
-	
-	// PIRP irp = WdfRequestWdmGetIrp(Request);
-		
-	DbgPrint("HCI!%s!Receive IoControlCode=0x%08X InputBufferLength=%u OutputBufferLength=%u\n",deviceContext->Name, IoControlCode, InputBufferLength, OutputBufferLength);
+			
+	DbgPrint("HCI!%s!%08X!Receive IoControlCode=0x%X InputBufferLength=%u OutputBufferLength=%u\n",deviceContext->Name, uid, IoControlCode, InputBufferLength, OutputBufferLength);
 	
     if (InputBufferLength > 0) {
         status = WdfRequestRetrieveInputBuffer(Request, InputBufferLength, &buffer, &bufSize);
         if (!NT_SUCCESS(status)) {
-            DbgPrint("HCI!%s!WdfRequestRetrieveInputBuffer failed: 0x%x\n", deviceContext->Name, status);
+            DbgPrint("HCI!%s!%08X!WdfRequestRetrieveInputBuffer failed: 0x%x\n", deviceContext->Name, uid, status);
             WdfRequestComplete(Request, status);
             return;
         }
-        printBufferContent(buffer, bufSize, deviceContext->Name);
+        printBufferContent(buffer, bufSize, deviceContext->Name, uid);
     }
 
-	FilterForwardRequest(Request, WdfDeviceGetIoTarget(device), deviceContext);
+    FilterForwardRequestWithCompletionRoutine(Request, WdfDeviceGetIoTarget(device), deviceContext, uid);
+	//FilterForwardRequest(Request, WdfDeviceGetIoTarget(device), deviceContext);
 
 	//DbgPrint("HCI!%s!End FilterEvtIoDeviceControl\n",deviceContext->Name);
 
