@@ -3,12 +3,23 @@
 //
 // set PATH=C:\Program Files (x86)\Microsoft Visual Studio 12.0\Common7\IDE\;C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\x86_arm;C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin;%PATH%
 //
+// https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-code-reference2
 
 #include <ntifs.h>
 #include <wdm.h>
 #include <ntstrsafe.h>
 
-// https://www.osr.com/nt-insider/2017-issue1/making-device-objects-accessible-safe/
+#define ABSOLUTE(wait) (wait)
+#define RELATIVE(wait) (-(wait))
+
+#define NANOSECONDS(nanos) \
+(((signed __int64)(nanos)) / 100L)
+
+#define MICROSECONDS(micros) \
+(((signed __int64)(micros)) * NANOSECONDS(1000L))
+
+#define MILLISECONDS(milli) \
+(((signed __int64)(milli)) * MICROSECONDS(1000L))
 
 VOID printBufferContent(PVOID buffer, size_t bufSize)
 {
@@ -32,7 +43,7 @@ VOID printBufferContent(PVOID buffer, size_t bufSize)
 
 		if ((i+1)%38 == 0)
 		{
-			DbgPrint("Control!%s%s", hexString, chrString);
+			DbgPrint("Control!%s%s\n", hexString, chrString);
 			RtlZeroMemory(hexString, 256);
 			RtlZeroMemory(chrString, 256);
 			multiLine = TRUE;
@@ -48,7 +59,7 @@ VOID printBufferContent(PVOID buffer, size_t bufSize)
 			RtlStringCbPrintfA(padding, 256, "%*s", 3*(38-(i%38)),"");
 		}
 
-		DbgPrint("Control!%s%s%s", hexString, padding, chrString);
+		DbgPrint("Control!%s%s%s\n", hexString, padding, chrString);
 	}
 
 	if (i == 608)
@@ -111,17 +122,28 @@ NTSTATUS SendAnIoctl(PDEVICE_OBJECT TargetDevice,
     KEVENT          event;
     IO_STATUS_BLOCK iosb;
     PIRP            irp;
-	//PVOID			pOutputBuffer;
+	PVOID			pOutputBuffer2;
+	PVOID 			pInputBuffer2;
     
 	DbgPrint("Control!SendAnIoctl TargetDevice=0x%p IoControlCode=0x%X pInputBuffer=0x%p InputBufferLength=0x%p pOutputBuffer=0x%p OutputBufferLength=0x%X\n",TargetDevice, IoControlCode, pInputBuffer, InputBufferLength, pOutputBuffer, OutputBufferLength);
 
-	//pOutputBuffer = ExAllocatePoolWithTag(PagedPool, 4, 'wp81');	
+	pInputBuffer2 = ExAllocatePoolWithTag(NonPagedPoolNx, InputBufferLength, 'wp81');	
+	pOutputBuffer2 = ExAllocatePoolWithTag(NonPagedPoolNx, OutputBufferLength, 'wp81');	
+
+	if (InputBufferLength > 0) {
+		DbgPrint("Control! InputBuffer:\n");
+		printBufferContent(pInputBuffer, InputBufferLength);
+
+		RtlCopyMemory(pInputBuffer2, pInputBuffer, InputBufferLength);
+	}
+
+	KeInitializeEvent(&event, NotificationEvent, FALSE);
 
     irp = IoBuildDeviceIoControlRequest(IoControlCode,
                                         TargetDevice,
-                                        pInputBuffer,
+                                        pInputBuffer2,
                                         InputBufferLength,
-                                        pOutputBuffer,
+                                        pOutputBuffer2,
                                         OutputBufferLength,
                                         FALSE,
                                         &event,
@@ -145,18 +167,16 @@ NTSTATUS SendAnIoctl(PDEVICE_OBJECT TargetDevice,
 		*information = iosb.Information;
     }
 
-	if (InputBufferLength > 0) {
-		DbgPrint("Control! InputBuffer:\n");
-		printBufferContent(pInputBuffer, InputBufferLength);
+	if (*information > 0) {
+		DbgPrint("Control! status=0x%X information=%u OutputBuffer2:\n", status, *information);
+		printBufferContent(pOutputBuffer2, *information);
+
+		RtlCopyMemory(pOutputBuffer, pOutputBuffer2, *information);
 	}
 
-	if (OutputBufferLength > 0) {
-		DbgPrint("Control! OutputBuffer:\n");
-		printBufferContent(pOutputBuffer, OutputBufferLength);
-	}
-	 
 Exit:
-	//ExFreePoolWithTag(pOutputBuffer, 'wp81');
+	ExFreePoolWithTag(pInputBuffer2, 'wp81');
+	ExFreePoolWithTag(pOutputBuffer2, 'wp81');
 	DbgPrint("Control!End SendAnIoctl\n");
     return status;
 }

@@ -27,6 +27,20 @@ using namespace Windows::UI::Core;
 
 #define IOCTL_FILTER_CONTROL_CMD CTL_CODE(CONTROL_DEVICE, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+typedef enum _BTHX_HCI_PACKET_TYPE {
+	HciPacketCommand = 0x01,
+	HciPacketAclData = 0x02,
+	HciPacketEvent = 0x04
+} BTHX_HCI_PACKET_TYPE;
+
+#pragma pack(1)
+typedef struct _BTHX_HCI_READ_WRITE_CONTEXT {
+	ULONG   DataLen;    // Size of Data
+	UCHAR   Type;       // Packet Type
+	_Field_size_bytes_(DataLen) UCHAR   Data[1];    // Actual data
+} BTHX_HCI_READ_WRITE_CONTEXT, *PBTHX_HCI_READ_WRITE_CONTEXT;
+#pragma pack(8)
+
 Win32Api win32Api;
 
 MainPage::MainPage()
@@ -489,25 +503,31 @@ void wp81HCIFilter::MainPage::SendIoctl()
 			return;
 		}
 
-		UCHAR* pInputBuffer = (UCHAR*)malloc(4);
-		pInputBuffer[0] = 1;
-		pInputBuffer[1] = 0;
-		pInputBuffer[2] = 0;
-		pInputBuffer[3] = 0;
-		printBufferContent(pInputBuffer, 4);
+		UCHAR* pInputBuffer = (UCHAR*)malloc(8);
+		//OpCode=0x1009 INFORMATIONAL_PARAMETERS:READ_BD_ADDR
+		//03 00 00 00 01 09 10 00
+		pInputBuffer[0] = 0x03;
+		pInputBuffer[1] = 0x00;
+		pInputBuffer[2] = 0x00;
+		pInputBuffer[3] = 0x00;
+		pInputBuffer[4] = 0x01;
+		pInputBuffer[5] = 0x09;
+		pInputBuffer[6] = 0x10;
+		pInputBuffer[7] = 0x00;
+		printBufferContent(pInputBuffer, 8);
 		PVOID pOutputBuffer = malloc(4);
-		DWORD returned;
-		BOOL success = win32Api.DeviceIoControl(hDevice, 0x410403, nullptr, 0, pOutputBuffer, 4, &returned, nullptr);
-		//BOOL success = win32Api.DeviceIoControl(hDevice, 0x410407, pInputBuffer, 4, nullptr, 0, &returned, nullptr);
+		DWORD information;
+		BOOL success = win32Api.DeviceIoControl(hDevice, 0x41040F, pInputBuffer, 8, pOutputBuffer, 4, &information, nullptr);
+		//BOOL success = win32Api.DeviceIoControl(hDevice, IOCTL_FILTER_CONTROL_CMD, nullptr, 0, nullptr, 0, &returned, nullptr);
 		if (success)
 		{
-			debug(L"Device call control device succeeded! returned=%u\n", returned);
+			debug(L"Call of control device succeeded! information=%u\n", information);
 			UIConsoleAddText(L"succeeded!\n");
-			//printBufferContent(pOutputBuffer, 4);
+			printBufferContent(pOutputBuffer, information);
 		}
 		else
 		{
-			debug(L"Device call control device failed! 0x%X\n", GetLastError());
+			debug(L"Call of control device failed! 0x%X\n", GetLastError());
 			UIConsoleAddText(L"failed!\n");
 		}
 		free(pInputBuffer);

@@ -8,7 +8,17 @@
 #include <wdf.h>
 #include <ntstrsafe.h>
 
-// https://www.osr.com/nt-insider/2017-issue1/making-device-objects-accessible-safe/
+#define ABSOLUTE(wait) (wait)
+#define RELATIVE(wait) (-(wait))
+
+#define NANOSECONDS(nanos) \
+(((signed __int64)(nanos)) / 100L)
+
+#define MICROSECONDS(micros) \
+(((signed __int64)(micros)) * NANOSECONDS(1000L))
+
+#define MILLISECONDS(milli) \
+(((signed __int64)(milli)) * MICROSECONDS(1000L))
 
 typedef struct _DEVICEFILTER_CONTEXT
 {
@@ -45,7 +55,7 @@ VOID printBufferContent(PVOID buffer, size_t bufSize, CHAR* Name, ULONG uid)
 
 		if ((i+1)%38 == 0)
 		{
-			DbgPrint("HCI!%s!%08X!%s%s", Name, uid, hexString, chrString);
+			DbgPrint("HCI!%s!%08X!%s%s\n", Name, uid, hexString, chrString);
 			RtlZeroMemory(hexString, 256);
 			RtlZeroMemory(chrString, 256);
 			multiLine = TRUE;
@@ -61,7 +71,7 @@ VOID printBufferContent(PVOID buffer, size_t bufSize, CHAR* Name, ULONG uid)
 			RtlStringCbPrintfA(padding, 256, "%*s", 3*(38-(i%38)),"");
 		}
 
-		DbgPrint("HCI!%s!%08X!%s%s%s",Name, uid, hexString, padding, chrString);
+		DbgPrint("HCI!%s!%08X!%s%s%s\n",Name, uid, hexString, padding, chrString);
 	}
 
 	if (i == 608)
@@ -145,6 +155,10 @@ FilterForwardRequestWithCompletionRoutine(
     WdfRequestSetCompletionRoutine(Request,
                                 FilterRequestCompletionRoutine,
                                 completionContext);
+
+    // LARGE_INTEGER timeout;
+	// timeout.QuadPart = RELATIVE(MILLISECONDS(500));
+	// KeDelayExecutionThread(KernelMode, FALSE, &timeout);
 
     ret = WdfRequestSend(Request,
                          Target,
