@@ -98,6 +98,12 @@ void printBufferContent(PVOID buffer, size_t bufSize)
 	unsigned char *p = (unsigned char*)buffer;
 	unsigned int i = 0;
 	BOOLEAN multiLine = FALSE;
+
+	if (bufSize < 1)
+	{
+		return;
+	}
+
 	for (; i<bufSize && i < 608; i++)
 	{
 		sprintf_s(tempString, 8, "%02X ", p[i]);
@@ -503,36 +509,75 @@ void wp81HCIFilter::MainPage::SendIoctl()
 			return;
 		}
 
-		UCHAR* pInputBuffer = (UCHAR*)malloc(8);
-		//OpCode=0x1009 INFORMATIONAL_PARAMETERS:READ_BD_ADDR
-		//03 00 00 00 01 09 10 00
-		pInputBuffer[0] = 0x03;
-		pInputBuffer[1] = 0x00;
-		pInputBuffer[2] = 0x00;
-		pInputBuffer[3] = 0x00;
-		pInputBuffer[4] = 0x01;
-		pInputBuffer[5] = 0x09;
-		pInputBuffer[6] = 0x10;
-		pInputBuffer[7] = 0x00;
-		printBufferContent(pInputBuffer, 8);
-		PVOID pOutputBuffer = malloc(4);
-		DWORD information;
-		BOOL success = win32Api.DeviceIoControl(hDevice, 0x41040F, pInputBuffer, 8, pOutputBuffer, 4, &information, nullptr);
-		//BOOL success = win32Api.DeviceIoControl(hDevice, IOCTL_FILTER_CONTROL_CMD, nullptr, 0, nullptr, 0, &returned, nullptr);
+		UCHAR* pInputBuffer1 = (UCHAR*)malloc(4);
+		PVOID pOutputBuffer1 = malloc(262);
+		DWORD information1;
+		BOOL success;
+
+		pInputBuffer1[0] = 0x04;
+		pInputBuffer1[1] = 0x00;
+		pInputBuffer1[2] = 0x00;
+		pInputBuffer1[3] = 0x00;
+		printBufferContent(pInputBuffer1, 4);
+		success = win32Api.DeviceIoControl(hDevice, 0x410413, pInputBuffer1, 4, pOutputBuffer1, 262, &information1, nullptr);
 		if (success)
 		{
-			debug(L"Call of control device succeeded! information=%u\n", information);
+			debug(L"1st call of control device succeeded! information1=%u\n", information1);
 			UIConsoleAddText(L"succeeded!\n");
-			printBufferContent(pOutputBuffer, information);
+			printBufferContent(pOutputBuffer1, information1);
 		}
 		else
 		{
-			debug(L"Call of control device failed! 0x%X\n", GetLastError());
+			debug(L"1st call of control device failed! 0x%X\n", GetLastError());
 			UIConsoleAddText(L"failed!\n");
 		}
-		free(pInputBuffer);
-		free(pOutputBuffer);
 
+		free(pInputBuffer1);
+		free(pOutputBuffer1);
+		CloseHandle(hDevice);
+	});
+	create_task([this]()
+	{
+		// lumia 520
+		HANDLE hDevice = win32Api.CreateFileW(L"\\\\.\\wp81controldevice", GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+		if (hDevice == INVALID_HANDLE_VALUE)
+		{
+			debug(L"Failed to open device! 0x%X\n", GetLastError());
+			UIConsoleAddText(L"Failed to open device.\n");
+			return;
+		}
+
+		UCHAR* pInputBuffer2 = (UCHAR*)malloc(8);
+		PVOID pOutputBuffer2 = malloc(4);
+		DWORD information2;
+		BOOL success;
+
+		//OpCode=0x1009 INFORMATIONAL_PARAMETERS:READ_BD_ADDR
+		//03 00 00 00 01 09 10 00
+		pInputBuffer2[0] = 0x03;
+		pInputBuffer2[1] = 0x00;
+		pInputBuffer2[2] = 0x00;
+		pInputBuffer2[3] = 0x00;
+		pInputBuffer2[4] = 0x01;
+		pInputBuffer2[5] = 0x09;
+		pInputBuffer2[6] = 0x10;
+		pInputBuffer2[7] = 0x00;
+		printBufferContent(pInputBuffer2, 8);
+		success = win32Api.DeviceIoControl(hDevice, 0x41040F, pInputBuffer2, 8, pOutputBuffer2, 4, &information2, nullptr);
+		if (success)
+		{
+			debug(L"2nd call of control device succeeded! information2=%u\n", information2);
+			UIConsoleAddText(L"succeeded!\n");
+			printBufferContent(pOutputBuffer2, information2);
+		}
+		else
+		{
+			debug(L"2nd call of control device failed! 0x%X\n", GetLastError());
+			UIConsoleAddText(L"failed!\n");
+		}
+
+		free(pInputBuffer2);
+		free(pOutputBuffer2);
 		CloseHandle(hDevice);
 	});
 }

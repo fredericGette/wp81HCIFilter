@@ -122,8 +122,8 @@ NTSTATUS SendAnIoctl(PDEVICE_OBJECT TargetDevice,
     KEVENT          event;
     IO_STATUS_BLOCK iosb;
     PIRP            irp;
-	PVOID			pOutputBuffer2;
 	PVOID 			pInputBuffer2;
+	PVOID			pOutputBuffer2;
     
 	DbgPrint("Control!SendAnIoctl TargetDevice=0x%p IoControlCode=0x%X pInputBuffer=0x%p InputBufferLength=0x%p pOutputBuffer=0x%p OutputBufferLength=0x%X\n",TargetDevice, IoControlCode, pInputBuffer, InputBufferLength, pOutputBuffer, OutputBufferLength);
 
@@ -148,13 +148,13 @@ NTSTATUS SendAnIoctl(PDEVICE_OBJECT TargetDevice,
                                         FALSE,
                                         &event,
                                         &iosb);
- 
     if (irp == NULL) {
         goto Exit;
     }
  
     status = IoCallDriver(TargetDevice, irp);
- 
+
+	// Cannot utilize a completion routine because the outputbuffer from the usermode is in paged memory.
     if (status == STATUS_PENDING) {
 		DbgPrint("Control! Wait STATUS_PENDING\n");
 
